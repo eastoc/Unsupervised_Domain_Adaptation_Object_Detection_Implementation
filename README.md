@@ -1,4 +1,4 @@
-# Unsupervised_Domain_Adaptation_Benchmark
+# Unsupervised_Domain_Adaptation_Object_Detection_Implementation
 This is the unsupervised domain adaptation object detection implementation based on the mmdetection framework.
 
 Untill now, we have reproduced some SOTA UDAOD models including DAF, MAF, and DeepAlign on our custom datasets. In the future, these models will bed valided on the CityScapes and FoggyCityScapes.
