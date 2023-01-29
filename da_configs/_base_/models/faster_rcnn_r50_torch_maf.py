@@ -1,0 +1,108 @@
+# model settings
+norm_cfg = dict(type='BN', requires_grad=True) # BN不进行梯度更新，节省GPU内存
+model = dict(
+    type='MAFasterRCNN',
+    backbone=dict(
+        type='ResNet_DA',
+        depth=50,
+        num_stages=4,
+        strides=(1, 2, 2, 1),
+        dilations=(1, 1, 1, 2),
+        # 表示本模块输出的特征图索引，(0, 1, 2, 3),表示4个 stage 输出都需要，
+        # 其 下采样率 为 (1/4,1/8,1/16,1/32)，channel 为 (256, 512, 1024, 2048)
+        out_indices=(3,),
+        frozen_stages=1,
+        norm_cfg=norm_cfg,
+        norm_eval=True,
+        #Bottleneck 是标准的 1x1-3x3-1x1 结构，考虑 stride=2 下采样的场景，caffe 模式下，stride 参数放置在第一个 1x1 卷积上，而 Pyorch 模式下，stride 放在第二个 3x3 卷积上
+        style='pytorch',
+        init_cfg=dict(
+            type='Pretrained',
+            checkpoint='torchvision://resnet50')),
+    rpn_head=dict(
+        type='RPNHeadDA',
+        in_channels=2048,
+        feat_channels=2048,
+        anchor_generator=dict(
+            type='AnchorGenerator',
+            scales=[2, 4, 8, 16, 32],
+            ratios=[0.5, 1.0, 2.0],
+            strides=[16]),
+        bbox_coder=dict(
+            type='DeltaXYWHBBoxCoder',
+            target_means=[.0, .0, .0, .0],
+            target_stds=[1.0, 1.0, 1.0, 1.0]),
+        loss_cls=dict(
+            type='CrossEntropyLoss', use_sigmoid=True, loss_weight=1.0),
+        loss_bbox=dict(type='SmoothL1Loss', beta=1.0, loss_weight=1.0)),
+    roi_head=dict(
+        type='StandardRoIHeadDA_v5',
+        bbox_roi_extractor=dict(
+            type='SingleRoIExtractor',
+            roi_layer=dict(type='RoIAlign', output_size=7, sampling_ratio=0),
+            out_channels=2048,
+            featmap_strides=[16]),
+        bbox_head=dict(
+            type='Shared2FCBBoxHead',
+            in_channels=2048,
+            fc_out_channels=1024,
+            roi_feat_size=7,
+            num_classes=1,
+            bbox_coder=dict(
+                type='DeltaXYWHBBoxCoder',
+                target_means=[0., 0., 0., 0.],
+                target_stds=[0.1, 0.1, 0.2, 0.2]),
+            reg_class_agnostic=False,
+            loss_cls=dict(
+                type='CrossEntropyLoss', use_sigmoid=True, loss_weight=1.0),
+            loss_bbox=dict(type='SmoothL1Loss', beta=1.0, loss_weight=1.0))),
+    # model training and testing settings
+    train_cfg=dict(
+        rpn=dict(
+            assigner=dict(
+                type='MaxIoUAssigner',
+                pos_iou_thr=0.7,
+                neg_iou_thr=0.3,
+                min_pos_iou=0.3,
+                match_low_quality=True,
+                ignore_iof_thr=-1),
+            sampler=dict(
+                type='RandomSampler',
+                num=256,
+                pos_fraction=0.5,
+                neg_pos_ub=-1,
+                add_gt_as_proposals=False),
+            allowed_border=0,
+            pos_weight=-1,
+            debug=False),
+        rpn_proposal=dict(
+            nms_pre=12000,
+            max_per_img=2000,
+            nms=dict(type='nms', iou_threshold=0.7),
+            min_bbox_size=0),
+        rcnn=dict(
+            assigner=dict(
+                type='MaxIoUAssigner',
+                pos_iou_thr=0.5,
+                neg_iou_thr=0.5,
+                min_pos_iou=0.5,
+                match_low_quality=False,
+                ignore_iof_thr=-1),
+            sampler=dict(
+                type='RandomSampler',
+                num=512,
+                pos_fraction=0.25,
+                neg_pos_ub=-1,
+                add_gt_as_proposals=True),
+            pos_weight=-1,
+            debug=False)),
+    test_cfg=dict(
+        rpn=dict(
+            nms=dict(type='nms', iou_threshold=0.7),
+            nms_pre=6000,
+            max_per_img=1000,
+            min_bbox_size=0),
+        rcnn=dict(
+            score_thr=0.05,
+            nms=dict(type='nms', iou_threshold=0.5),
+            max_per_img=100)))
