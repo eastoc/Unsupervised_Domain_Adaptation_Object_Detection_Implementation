@@ -1,8 +1,8 @@
 cff-version: 1.2.0
 message: "If you use this software, please cite it as below."
 authors:
-  - name: "MMDetection Contributors"
-title: "OpenMMLab Detection Toolbox and Benchmark"
-date-released: 2018-08-22
-url: "https://github.com/open-mmlab/mmdetection"
+  - name: "Fangdong Wu"
+title: "Unsupervised Domain_Adaptation Object_Detection Implementation"
+date-released: 2023-02-15
+url: "https://github.com/eastoc/Unsupervised_Domain_Adaptation_Object_Detection_Implementation"
 license: Apache-2.0
