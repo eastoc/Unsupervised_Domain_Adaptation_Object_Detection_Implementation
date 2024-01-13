@@ -45,7 +45,7 @@ class DAFasterRCNN_Tri(TwoStageDetector):
 
         self.global_align = True
         self.local_align = True
-        self.patch_align = True
+        self.patch_align = False
 
     def extract_feat_train(self, img, gt_domain):
         """Directly extract features from the backbone+neck."""

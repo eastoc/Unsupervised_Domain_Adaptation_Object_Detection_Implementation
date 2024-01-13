@@ -1,14 +1,14 @@
 # Copyright (c) OpenMMLab. All rights reserved.
 import torch.nn as nn
 from mmcv.cnn import ConvModule
-
+import torch
 from mmdet.models.builder import HEADS
 from mmdet.models.utils import build_linear_layer
 from .bbox_head import BBoxHead
 
 
 @HEADS.register_module()
-class ConvFCBBoxHead(BBoxHead):
+class ConvFCBBoxHeadSWDA(BBoxHead):
     r"""More general bbox head, with shared conv and fc layers and two optional
     separated branches.
 
@@ -33,7 +33,7 @@ class ConvFCBBoxHead(BBoxHead):
                  init_cfg=None,
                  *args,
                  **kwargs):
-        super(ConvFCBBoxHead, self).__init__(
+        super(ConvFCBBoxHeadSWDA, self).__init__(
             *args, init_cfg=init_cfg, **kwargs)
         assert (num_shared_convs + num_shared_fcs + num_cls_convs +
                 num_cls_fcs + num_reg_convs + num_reg_fcs > 0)
@@ -155,7 +155,7 @@ class ConvFCBBoxHead(BBoxHead):
             last_layer_dim = self.fc_out_channels
         return branch_convs, branch_fcs, last_layer_dim
 
-    def forward(self, x):
+    def forward(self, x, context_feats=None):
         # shared part
         if self.num_shared_convs > 0:
             for conv in self.shared_convs:
@@ -169,9 +169,19 @@ class ConvFCBBoxHead(BBoxHead):
 
             for fc in self.shared_fcs:
                 x = self.relu(fc(x))
+        cat_feat = x
+        if context_feats:
+            global_feat = context_feats['global_feat'][0].view(-1)
+            global_feat = global_feat.expand(512, 512)
+            local_feat = context_feats['local_feat'][0].view(-1)
+            local_feat = local_feat.expand(512, 512)
+            #print(x.size(), global_feat.size(), local_feat.size())
+
+            cat_feat = torch.cat((global_feat,local_feat),1)
+            cat_feat += x
         # separate branches
-        x_cls = x
-        x_reg = x
+        x_cls = cat_feat
+        x_reg = cat_feat
 
         for conv in self.cls_convs:
             x_cls = conv(x_cls)
@@ -195,8 +205,9 @@ class ConvFCBBoxHead(BBoxHead):
         bbox_pred = self.fc_reg(x_reg) if self.with_reg else None
         return cls_score, bbox_pred
 
-    def forward_train_da(self, x):
+    def forward_train(self, x, context_feats=None):
         # shared part
+
         if self.num_shared_convs > 0:
             for conv in self.shared_convs:
                 x = conv(x)
@@ -209,7 +220,6 @@ class ConvFCBBoxHead(BBoxHead):
 
             for fc in self.shared_fcs:
                 x = self.relu(fc(x))
-
         cat_feat = x
         if context_feats:
             global_feat = context_feats['global_feat'][0].view(-1)
@@ -221,8 +231,8 @@ class ConvFCBBoxHead(BBoxHead):
             cat_feat = torch.cat((global_feat,local_feat),1)
             cat_feat += x
         # separate branches
-        x_cls = x
-        x_reg = x
+        x_cls = cat_feat
+        x_reg = cat_feat
         feat = x
         
         for conv in self.cls_convs:
@@ -249,10 +259,10 @@ class ConvFCBBoxHead(BBoxHead):
 
 
 @HEADS.register_module()
-class Shared2FCBBoxHead(ConvFCBBoxHead):
+class Shared2FCBBoxHeadSWDA(ConvFCBBoxHeadSWDA):
 
     def __init__(self, fc_out_channels=1024, *args, **kwargs):
-        super(Shared2FCBBoxHead, self).__init__(
+        super(Shared2FCBBoxHeadSWDA, self).__init__(
             num_shared_convs=0,
             num_shared_fcs=2,
             num_cls_convs=0,
@@ -265,10 +275,10 @@ class Shared2FCBBoxHead(ConvFCBBoxHead):
 
 
 @HEADS.register_module()
-class Shared4Conv1FCBBoxHead(ConvFCBBoxHead):
+class Shared4Conv1FCBBoxHeadSWDA(ConvFCBBoxHeadSWDA):
 
     def __init__(self, fc_out_channels=1024, *args, **kwargs):
-        super(Shared4Conv1FCBBoxHead, self).__init__(
+        super(Shared4Conv1FCBBoxHeadSWDA, self).__init__(
             num_shared_convs=4,
             num_shared_fcs=1,
             num_cls_convs=0,

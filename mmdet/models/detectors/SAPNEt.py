@@ -9,7 +9,7 @@ import torch.nn.functional as F
 from ..utils import cluster
 
 @DETECTORS.register_module()
-class FasterRCNN_SWDA(TwoStageDetector):
+class SAPFasterRCNN(TwoStageDetector):
     """Implementation of `Faster R-CNN <https://arxiv.org/abs/1506.01497>`_"""
 
     def __init__(self,
@@ -21,7 +21,7 @@ class FasterRCNN_SWDA(TwoStageDetector):
                  neck=None,
                  pretrained=None,
                  init_cfg=None):
-        super(FasterRCNN_SWDA, self).__init__(
+        super(SAPFasterRCNN, self).__init__(
             backbone=backbone,
             neck=neck,
             rpn_head=rpn_head,
@@ -35,21 +35,6 @@ class FasterRCNN_SWDA(TwoStageDetector):
         self.criterion_fl = FocalLoss()
 
         self.global_align = True
-        self.context = True
-        self.patch_align = True
-
-    def extract_feat_train(self, img, gt_domain):
-        """Directly extract features from the backbone+neck."""
-        if self.context == False:
-            x, global_loss, patch_loss_bottom = self.backbone.forward_train(img, gt_domain)
-            if self.with_neck:
-                x = self.neck(x)
-            return x, global_loss, patch_loss_bottom
-        elif self.context == True:
-            x, global_loss, patch_loss_bottom, context_feats = self.backbone.forward_train(img, gt_domain)
-            if self.with_neck:
-                x = self.neck(x)
-            return x, global_loss, patch_loss_bottom, context_feats
 
     def global_loss(self, domain_pred, gt_domain):
         da_globle_loss = torch.zeros(len(domain_pred))
@@ -100,16 +85,13 @@ class FasterRCNN_SWDA(TwoStageDetector):
             dict[str, Tensor]: a dictionary of loss components
         """
         global_lamda = 0.1
-        local_lamda = 0.1
     
         gt_domain = torch.zeros(len(gt_da), requires_grad=True, device='cuda').long()
         for i,index in enumerate(gt_da):
             if index == 1:
                 gt_domain[i] = 1
-        if self.context==False:
-            x, global_loss, patch_bottom_loss = self.extract_feat_train(img, gt_domain)
-        else:
-            x, global_loss, patch_bottom_loss, context_feats = self.extract_feat_train(img, gt_domain)
+
+        x = self.extract_feat(img)
 
         losses = dict()
 
@@ -134,19 +116,14 @@ class FasterRCNN_SWDA(TwoStageDetector):
                     loss_rpn_cls=torch.tensor(0.0,requires_grad=False,device='cuda').float(),
                     loss_rpn_bbox=torch.tensor(0.0,requires_grad=False,device='cuda').float())
             losses.update(rpn_losses)
-            #print(rpn_losses)
         else:
             proposal_list = proposals
-        if self.context ==False:
-            roi_losses, bbox_feats, bbox_cls = self.roi_head.forward_train(x, img_metas, proposal_list,
+
+        roi_losses, bbox_feats, bbox_cls = self.roi_head.forward_train(x, img_metas, proposal_list,
                                                  gt_bboxes, gt_labels, gt_da,
                                                  gt_bboxes_ignore, gt_masks,
                                                  **kwargs)
-        else:
-            roi_losses, bbox_feats, bbox_cls = self.roi_head.forward_train(x, img_metas, proposal_list,
-                                                    gt_bboxes, gt_labels, gt_da,
-                                                    gt_bboxes_ignore, gt_masks,context_feats,
-                                                    **kwargs)
+
         
         #roi_losses = self.roi_head.forward_train(x, img_metas, proposal_list,
         #                                         gt_bboxes, gt_labels,
@@ -154,49 +131,30 @@ class FasterRCNN_SWDA(TwoStageDetector):
         #                                         **kwargs)
         
         losses.update(roi_losses)
-        """
+        global_lamda = torch.tensor(0.1, requires_grad=True, device='cuda')
+        local_lamda = torch.tensor(0.1, requires_grad=True, device='cuda')
+
+        if self.local_align:
+            local_da_loss = self.group_local_da_loss(bbox_feats, local_lamda, bbox_cls)
+
+        
+       
         if self.global_align:
-            da_img_losses.update(da_globle_loss=da_globle_losses)
-            #losses.update(da_img_losses)
-
-        """
-
-        #global_lamda = torch.tensor(0.1, requires_grad=True, device='cuda')
-        #patch_bot_lamda = torch.tensor(0.1, requires_grad=True, device='cuda')
+            da_globle_loss = global_lamda * sum(global_loss)
+            losses.update(globle_da_loss=da_globle_loss)
         
-        da_globle_loss = 0.1 * global_loss
-        losses.update(globle_da_loss=da_globle_loss)
-        
-        patch_bot_loss = 0.1 * patch_bottom_loss     
-        losses.update(patch_bottom_loss=patch_bot_loss)
+        if self.local_align:
+            local_da_loss = local_lamda * local_da_loss
+            losses.update(local_da_loss=local_da_loss)
         
         return losses
 
-    def local_da_loss(self, bbox_feats, lamda):
-        
-        _local_da_loss = dict()
-        label_src = torch.zeros(len(bbox_feats[0]), requires_grad=False, device='cuda').long()
-        label_tar = torch.ones(len(bbox_feats[1]), requires_grad=False, device='cuda').long()
-        label_da = torch.cat([label_src, label_tar], dim=0)
-        bbox_feats = torch.cat(bbox_feats, dim=0)
-
-        pred_da = self.local_da(bbox_feats)
-        _ins_da_loss = self.criterion(pred_da, label_da)
-
-        return _ins_da_loss
-
     def extract_feat(self, img):
         """Directly extract features from the backbone+neck."""
-        if self.context == False:
-            x= self.backbone(img)
-            if self.with_neck:
-                x = self.neck(x)
-            return x
-        elif self.context == True:
-            x, context_feats = self.backbone(img)
-            if self.with_neck:
-                x = self.neck(x)
-            return x, context_feats
+        x= self.backbone(img)
+        if self.with_neck:
+            x = self.neck(x)
+        return x
 
     def train_step(self, data, optimizer):
         """The iteration step during training.
@@ -232,21 +190,3 @@ class FasterRCNN_SWDA(TwoStageDetector):
             loss=loss, log_vars=log_vars, num_samples=len(data['img_metas']))
 
         return outputs
-
-
-    def simple_test(self, img, img_metas, proposals=None, rescale=False):
-        """Test without augmentation."""
-
-        assert self.with_bbox, 'Bbox head must be implemented.'
-        if self.context==True:
-            x, context_feats = self.extract_feat(img)
-        else:
-            x = self.extract_feat(img)
-
-        if proposals is None:
-            proposal_list = self.rpn_head.simple_test_rpn(x, img_metas)
-        else:
-            proposal_list = proposals
-
-        return self.roi_head.simple_test(
-            x, proposal_list, img_metas, rescale=rescale)

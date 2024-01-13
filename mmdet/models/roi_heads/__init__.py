@@ -32,6 +32,7 @@ from .standard_roi_head_da_v3 import StandardRoIHeadDA_v3
 from .standard_roi_head_da_v4 import StandardRoIHeadDA_v4
 from .standard_roi_head_da_v5 import StandardRoIHeadDA_v5
 from .standard_roi_head_da_v6 import StandardRoIHeadDA_v6
+from .standard_roi_head_da_swda import StandardRoIHeadDA_SWDA
 from .standard_roi_head_da_cyda import StandardRoIHeadDA_cyda
 __all__ = [
     'BaseRoIHead', 'CascadeRoIHead', 'DoubleHeadRoIHead', 'MaskScoringRoIHead',
@@ -45,5 +46,5 @@ __all__ = [
     'SCNetRoIHead', 'SCNetMaskHead', 'SCNetSemanticHead', 'SCNetBBoxHead',
     'FeatureRelayHead', 'GlobalContextHead','StandardRoIHeadDA','LocalAlignmentHead','BaseRoIHeadDA',
     'InstanceAlignmentHead','InstanceAlignmentHead_DAF','StandardRoIHeadDA_v2','StandardRoIHeadDA_v3','StandardRoIHeadDA_v4','StandardRoIHeadDA_v5','StandardRoIHeadDA_v6',
-    'StandardRoIHeadDA_cyda'
+    'StandardRoIHeadDA_cyda','StandardRoIHeadDA_SWDA'
 ]

@@ -7,6 +7,7 @@ from ..losses import FocalLoss
 from ..roi_heads.instance_da import InstanceAlignmentHead
 import torch.nn.functional as F
 from ..utils import cluster
+from mmcv.runner import auto_fp16
 
 @DETECTORS.register_module()
 class DAFasterRCNN_Org(TwoStageDetector):
@@ -140,9 +141,11 @@ class DAFasterRCNN_Org(TwoStageDetector):
         #                                         **kwargs)
         
         losses.update(roi_losses)
-        global_lamda = torch.tensor(0.1, requires_grad=True, device='cuda')
-        local_lamda = torch.tensor(0.1, requires_grad=True, device='cuda')
-        consist_lamda = torch.tensor(0.1, requires_grad=True, device='cuda')
+        #global_lamda = torch.tensor(0.1, requires_grad=True, device='cuda')
+        #local_lamda = torch.tensor(0.1, requires_grad=True, device='cuda')
+        local_lamda = 0.1
+        consist_lamda = 0.1
+        #consist_lamda = torch.tensor(0.1, requires_grad=True, device='cuda')
 
         if self.local_align:
             local_da_loss, ins_preds, ins_labels = self.local_da_loss(bbox_feats, local_lamda)
@@ -150,7 +153,7 @@ class DAFasterRCNN_Org(TwoStageDetector):
             losses.update(local_da_loss=local_da_loss)
 
         if self.global_align:
-            da_globle_loss = global_lamda * global_loss
+            da_globle_loss = 0.1 * global_loss
             losses.update(globle_da_loss=da_globle_loss)
 
         consistency_loss = consist_lamda * self.consist_loss(imgs_feat, ins_preds, ins_labels)
@@ -159,7 +162,7 @@ class DAFasterRCNN_Org(TwoStageDetector):
         return losses
 
     def consist_loss(self, imgs_feat, ins_preds, ins_labels):
-        consistency_loss = torch.tensor(0.0, requires_grad=True, device='cuda')
+        consistency_loss = 0
         for i, img_feat in enumerate(imgs_feat):
             img_logit = torch.sigmoid(imgs_feat)
             I = torch.nonzero(img_logit).size()[0] # the number of the activations in the feature map
@@ -228,3 +231,106 @@ class DAFasterRCNN_Org(TwoStageDetector):
             loss=loss, log_vars=log_vars, num_samples=len(data['img_metas']))
 
         return outputs
+
+    @auto_fp16(apply_to=('img', ))
+    def forward_tSNE(self, img, img_metas, **kwargs):
+        """Calls either :func:`forward_train` or :func:`forward_test` depending
+        on whether ``return_loss`` is ``True``.
+
+        Note this setting will change the expected inputs. When
+        ``return_loss=True``, img and img_meta are single-nested (i.e. Tensor
+        and List[dict]), and when ``resturn_loss=False``, img and img_meta
+        should be double nested (i.e.  List[Tensor], List[List[dict]]), with
+        the outer list indicating test time augmentations.
+        """
+        if torch.onnx.is_in_onnx_export():
+            assert len(img_metas) == 1
+            return self.onnx_export(img[0], img_metas[0])
+
+        return self._forward_tSNE(img, img_metas, **kwargs)
+
+    def _forward_tSNE(self, imgs, img_metas, **kwargs):
+        """
+        Args:
+            imgs (List[Tensor]): the outer list indicates test-time
+                augmentations and inner Tensor should have a shape NxCxHxW,
+                which contains all images in the batch.
+            img_metas (List[List[dict]]): the outer list indicates test-time
+                augs (multiscale, flip, etc.) and the inner list indicates
+                images in a batch.
+        """
+        for var, name in [(imgs, 'imgs'), (img_metas, 'img_metas')]:
+            if not isinstance(var, list):
+                raise TypeError(f'{name} must be a list, but got {type(var)}')
+
+        num_augs = len(imgs)
+        if num_augs != len(img_metas):
+            raise ValueError(f'num of augmentations ({len(imgs)}) '
+                             f'!= num of image meta ({len(img_metas)})')
+
+        # NOTE the batched image size information may be useful, e.g.
+        # in DETR, this is needed for the construction of masks, which is
+        # then used for the transformer_head.
+        for img, img_meta in zip(imgs, img_metas):
+            batch_size = len(img_meta)
+            for img_id in range(batch_size):
+                img_meta[img_id]['batch_input_shape'] = tuple(img.size()[-2:])
+
+        if num_augs == 1:
+            # proposals (List[List[Tensor]]): the outer list indicates
+            # test-time augs (multiscale, flip, etc.) and the inner list
+            # indicates images in a batch.
+            # The Tensor should have a shape Px4, where P is the number of
+            # proposals.
+            if 'proposals' in kwargs:
+                kwargs['proposals'] = kwargs['proposals'][0]
+            return self.simple_test_tSNE(imgs[0], img_metas[0], **kwargs)
+        else:
+            assert imgs[0].size(0) == 1, 'aug test does not support ' \
+                                         'inference with batch size ' \
+                                         f'{imgs[0].size(0)}'
+            # TODO: support test augmentation for predefined proposals
+            assert 'proposals' not in kwargs
+            return self.tSNE_test(imgs, img_metas, **kwargs)
+
+
+    def tSNE_test(self, imgs, img_metas, rescale=False):
+        """Test with augmentations.
+
+        If rescale is False, then returned bboxes and masks will fit the scale
+        of imgs[0].
+        """
+        x = self.extract_feats_tSNE(imgs)
+        return x
+
+    def extract_feats_tSNE(self, imgs):
+        """Extract features from multiple images.
+
+        Args:
+            imgs (list[torch.Tensor]): A list of images. The images are
+                augmented from the same image but in different ways.
+
+        Returns:
+            list[torch.Tensor]: Features of different images
+        """
+        assert isinstance(imgs, list)
+        return [self.extract_feat_tSNE(img) for img in imgs]
+
+    def extract_feat_tSNE(self, img):
+        """Directly extract features from the backbone+neck."""
+        x= self.backbone(img)
+        
+        return x
+
+    def simple_test_tSNE(self, img, img_metas, proposals=None, rescale=False):
+        """Test without augmentation."""
+
+        assert self.with_bbox, 'Bbox head must be implemented.'
+        x = self.extract_feat(img)
+        if proposals is None:
+            proposal_list = self.rpn_head.simple_test_rpn(x, img_metas)
+        else:
+            proposal_list = proposals
+
+        return self.roi_head.simple_test_tSNE(
+            x, proposal_list, img_metas, rescale=rescale)

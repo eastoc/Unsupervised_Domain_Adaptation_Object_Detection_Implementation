@@ -15,7 +15,7 @@ def voc_classes():
 '''
 def voc_classes():
     return [
-        'tea',
+        'apple',
     ]
 
 #def voc_classes():

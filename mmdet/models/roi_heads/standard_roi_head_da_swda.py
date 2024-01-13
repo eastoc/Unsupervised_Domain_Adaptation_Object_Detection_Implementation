@@ -33,7 +33,7 @@ def bbox2roi_train(bbox_list):
     return rois_list
 
 @HEADS.register_module()
-class StandardRoIHeadDA_v5(BaseRoIHeadDA, BBoxTestMixin, MaskTestMixin):
+class StandardRoIHeadDA_SWDA(BaseRoIHeadDA, BBoxTestMixin, MaskTestMixin):
     """Simplest base roi head including one bbox head and one mask head."""
 
     def init_assigner_sampler(self):
@@ -85,6 +85,7 @@ class StandardRoIHeadDA_v5(BaseRoIHeadDA, BBoxTestMixin, MaskTestMixin):
                       gt_da,
                       gt_bboxes_ignore=None,
                       gt_masks=None,
+                      context_feats=None,
                       **kwargs):
         """
         Args:
@@ -125,7 +126,6 @@ class StandardRoIHeadDA_v5(BaseRoIHeadDA, BBoxTestMixin, MaskTestMixin):
                     feats=[lvl_feat[i][None] for lvl_feat in x])
                 sampling_results.append(sampling_result)
 
-
         losses = dict()
         bbox_feats = []
         bbox_cls = []
@@ -133,7 +133,7 @@ class StandardRoIHeadDA_v5(BaseRoIHeadDA, BBoxTestMixin, MaskTestMixin):
         if self.with_bbox:
             bbox_results, bbox_feats, bbox_cls = self._bbox_forward_train(x, sampling_results,
                                                     gt_bboxes, gt_labels, gt_da,
-                                                    img_metas)
+                                                    img_metas,context_feats)
             
             losses.update(bbox_results['loss_bbox'])
 
@@ -146,20 +146,20 @@ class StandardRoIHeadDA_v5(BaseRoIHeadDA, BBoxTestMixin, MaskTestMixin):
 
         return losses, bbox_feats, bbox_cls
 
-    def _bbox_forward(self, x, rois):
+    def _bbox_forward(self, x, rois, context_feats=None):
         """Box head forward function used in both training and testing."""
         # TODO: a more flexible way to decide which feature maps to use
         bbox_feats = self.bbox_roi_extractor(
             x[:self.bbox_roi_extractor.num_inputs], rois)
         if self.with_shared_head:
             bbox_feats = self.shared_head(bbox_feats)
-        cls_score, bbox_pred = self.bbox_head(bbox_feats)
+        cls_score, bbox_pred = self.bbox_head(bbox_feats, context_feats)
 
         bbox_results = dict(
             cls_score=cls_score, bbox_pred=bbox_pred, bbox_feats=bbox_feats)
         return bbox_results
 
-    def _bbox_forward_da(self, x, rois):
+    def _bbox_forward_da(self, x, rois, context_feats=None):
         """Box head forward function used in both training and testing."""
         # TODO: a more flexible way to decide which feature maps to use
         # rois: Tensor, dim = n x 5, [[domain batch size index, top_left_x, top_left_y, bottom_right_x, bottom_right_y]]  
@@ -170,7 +170,7 @@ class StandardRoIHeadDA_v5(BaseRoIHeadDA, BBoxTestMixin, MaskTestMixin):
         if self.with_shared_head:
             bbox_feats = self.shared_head(bbox_feats)
         #bbox_feat_da = bbox_feats # 进入共享层前的特征向量
-        cls_score, bbox_pred, bbox_feats = self.bbox_head.forward_train_da(bbox_feats)
+        cls_score, bbox_pred, bbox_feats = self.bbox_head.forward_train(bbox_feats, context_feats) # bbox_heads/convfc_bbox_head_XXX.py
         #cls_score, bbox_pred = self.bbox_head(bbox_feats)
         bbox_results = dict(
             cls_score=cls_score, bbox_pred=bbox_pred, bbox_feats=bbox_feats)
@@ -178,7 +178,7 @@ class StandardRoIHeadDA_v5(BaseRoIHeadDA, BBoxTestMixin, MaskTestMixin):
         return bbox_results
 
     def _bbox_forward_train(self, x, sampling_results, gt_bboxes, gt_labels, gt_da,
-                            img_metas):
+                            img_metas,context_feats):
         """Run forward function and calculate loss for box head in training."""
         bbox_results_src = dict()
         bbox_results_tar = dict()
@@ -201,7 +201,8 @@ class StandardRoIHeadDA_v5(BaseRoIHeadDA, BBoxTestMixin, MaskTestMixin):
                 if gt_da[i] == 0:
                     #print('roi',roi.size())
                     # 源域预测结果， [dict(cls, bbox, features), features_da], (features 与features_da 的区别在于是否经过共享fc层)
-                    bbox_results_src = self._bbox_forward_da([x[0][i].unsqueeze(0)], roi)
+
+                    bbox_results_src = self._bbox_forward_da([x[0][i].unsqueeze(0)], roi, context_feats)
                     bbox_feat_src = bbox_results_src['bbox_feats']
                     bbox_targets = self.bbox_head.get_targets([sampling_results[i]], [gt_bboxes[0][i]],
                         [gt_labels[0][i]], self.train_cfg)

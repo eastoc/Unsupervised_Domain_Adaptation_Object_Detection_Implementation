@@ -74,94 +74,6 @@ class shared_da_conv_head(nn.Module):
 
         return out
 
-class TransLocalAlignmentHead(nn.Module):
-    def __init__(self, in_channels, context=False, grl=True):
-        super(TransLocalAlignmentHead, self).__init__()
-        self.grl_flag = grl
-        self.grl = GradientScalarLayer(-1.0)
-        self.drop = nn.Dropout(p=0.5)
-        self.conv1 = nn.Conv2d(in_channels, in_channels, kernel_size=1, stride=1, padding=0, bias=False)
-        self.bn1 = nn.BatchNorm2d(in_channels)
-        #self.conv2 = nn.Conv2d(in_channels, int(in_channels), kernel_size=1, stride=1, padding=0, bias=False)
-        #self.bn2 = nn.BatchNorm2d(int(in_channels))
-        #self.conv3 = nn.Conv2d(int(in_channels), 1, kernel_size=1, stride=1, padding=0, bias=False)
-        self.trans = MHSA(int(in_channels),width=76,height=124)
-        init_weights(self.trans)
-        self.context = context
-        self._init_weights()
-
-    def _init_weights(self):
-        def normal_init(m, mean, stddev):
-            """
-            weight initalizer: random normal.
-            """
-            # x is a parameter
-            m.weight.data.normal_(mean, stddev)
-            # m.bias.data.zero_()
-        
-        normal_init(self.conv1, 0, 0.01)
-        #normal_init(self.conv2, 0, 0.01)
-        #normal_init(self.conv3, 0, 0.01)
-
-    def forward(self, x):
-        
-        x = self.grl(x)
-        x = self.drop(F.relu(self.bn1(self.conv1(x))))
-        #x = self.drop(F.relu(self.bn2(self.conv2(x))))
-        
-        if self.context:
-            feat = F.avg_pool2d(x, (x.size(2), x.size(3)))
-            x = self.conv3(x)
-            return x, feat
-        else:
-            x = self.trans(x)
-            #x = self.conv3(x)
-        return x
-
-class NonLocalAlignmentHead(nn.Module):
-    def __init__(self, in_channels, context=False, grl=True):
-        super(NonLocalAlignmentHead, self).__init__()
-        self.grl_flag = grl
-        self.grl = GradientScalarLayer(-1.0)
-        self.drop = nn.Dropout(p=0.5)
-        self.conv1 = nn.Conv2d(in_channels, in_channels, kernel_size=1, stride=1, padding=0, bias=False)
-        self.bn1 = nn.BatchNorm2d(in_channels)
-        #self.conv2 = nn.Conv2d(in_channels, int(in_channels), kernel_size=1, stride=1, padding=0, bias=False)
-        #self.bn2 = nn.BatchNorm2d(int(in_channels))
-        #self.conv3 = nn.Conv2d(int(in_channels), 1, kernel_size=1, stride=1, padding=0, bias=False)
-        self.nlb1 = NonLocalBlock(int(in_channels))
-
-        self.context = context
-        self._init_weights()
-
-    def _init_weights(self):
-        def normal_init(m, mean, stddev):
-            """
-            weight initalizer: random normal.
-            """
-            # x is a parameter
-            m.weight.data.normal_(mean, stddev)
-            # m.bias.data.zero_()
-        self.nlb1._init_weights()
-        normal_init(self.conv1, 0, 0.01)
-        #normal_init(self.conv2, 0, 0.01)
-        #normal_init(self.conv3, 0, 0.01)
-
-    def forward(self, x):
-        
-        x = self.grl(x)
-        x = self.drop(F.relu(self.bn1(self.conv1(x))))
-        #x = self.drop(F.relu(self.bn2(self.conv2(x))))
-        
-        if self.context:
-            feat = F.avg_pool2d(x, (x.size(2), x.size(3)))
-            x = self.conv3(x)
-            return x, feat
-        else:
-            x = self.nlb1(x)
-            #x = self.conv3(x)
-        return x
-
 class LocalAlignmentHead(nn.Module):
     def __init__(self, in_channels, context=False, grl=True):
         super(LocalAlignmentHead, self).__init__()
@@ -211,70 +123,29 @@ class GlobalAlignmentHead(BaseModule):
         self.conv1 = conv3x3(in_channel, int(in_channel/2), stride=2)
         self.bn1 = nn.BatchNorm2d(int(in_channel/2))
 
-        # res-block
-        #self.conv2 = nn.Conv2d(int(in_channel/2), int(in_channel/2), kernel_size=3, stride=1, padding=1)
-        #self.bn2 = nn.BatchNorm2d(int(in_channel/2))
-        
-        #self.conv3 = nn.Conv2d(int(in_channel/2), int(in_channel/2), kernel_size=3, stride=1, padding=1)
-        #self.bn3 = nn.BatchNorm2d(int(in_channel/2))
-
-        # SELayer
-        #self.avg_pool = nn.AdaptiveAvgPool2d(1)
-        #self.se_fc1 = nn.Linear(int(in_channel/2), int(in_channel/32))
-        #self.se_fc2 = nn.Linear(int(in_channel/32), int(in_channel/2))
-        
-        # CBAMLayer
-        #self.CBAM = CBAMLayer(channel=int(in_channel/2))
-        #init_weights(self.CBAM)
-
         # down-sample
         self.conv4 = conv3x3(int(in_channel/2), self.output_channel, stride=2)
         self.bn4 = nn.BatchNorm2d(self.output_channel)
         self.conv5 = conv3x3(self.output_channel, self.output_channel, stride=2)
         self.bn5 = nn.BatchNorm2d(self.output_channel)
 
-        self.fc1 = nn.Linear(self.output_channel, int(self.output_channel/2))
-        self.fc2 = nn.Linear(int(self.output_channel/2), 2)
+        self.fc = nn.Linear(self.output_channel, 2)
         self.context = context
-        #self.softmax = nn.Softmax(dim=1)
         #self.leaky_relu = nn.LeakyReLU(negative_slope=0.2, inplace=True)
-
-
-    def SELayer(self, inputs):
-        b,c,w,h = inputs.size()
-        x = self.avg_pool(inputs).view(b, c)
-        x = F.relu(self.se_fc1(x))
-        x = self.se_fc2(x)
-        x = torch.sigmoid(x)
-        x = x.view(b,c,1,1)
-        out = x*inputs
-        return out
 
     def forward(self, x):
         
         x = self.grl(x)
         x = F.dropout(F.relu(self.bn1(self.conv1(x))), training=self.training)
-        # SE-Res-block
-        #x = F.dropout(self.SELayer(res), training=self.training)
-        #x = F.dropout(F.relu(res+x), training=self.training)
-        #x = F.dropout(F.relu(self.bn2(self.conv2(res))), training=self.training)
-        #x = F.dropout(F.relu(self.bn3(self.conv3(x))+res), training=self.training)
-        
-        # Res-CBAM-block
-        #x = F.dropout(F.relu(self.bn2(self.conv2(res))), training=self.training)
-        #x = F.dropout(self.bn3(self.conv3(x)), training=self.training)
-        #x = self.CBAM(x)
-        #x = F.relu(x + res)
 
-        # down-sample
         x = F.dropout(F.relu(self.bn4(self.conv4(x))), training=self.training)
         x = F.dropout(F.relu(self.bn5(self.conv5(x))), training=self.training)
         x = F.avg_pool2d(x, (x.size(2),x.size(3)))
-        x = x.view(-1, self.output_channel)
+        x = x.view(-1, self.output_channel) # 512-d
         if self.context:
             feat = x
-        x = F.dropout(F.relu(self.fc1(x)), training=self.training)
-        x = self.fc2(x)
+        x = F.dropout(F.relu(self.fc(x)), training=self.training)
+        #x = self.fc(x)
         #x = torch.sigmoid(x)
         #x = self.softmax(x)
         if self.context:
@@ -296,10 +167,7 @@ class GlobalAlignmentHead(BaseModule):
         #normal_init(self.conv3, 0, 0.01)
         normal_init(self.conv4, 0, 0.01)
         normal_init(self.conv5, 0, 0.01)
-        #normal_init(self.se_fc1, 0, 0.01)
-        #normal_init(self.se_fc2, 0, 0.01)
-        normal_init(self.fc1, 0, 0.01)
-        normal_init(self.fc2, 0, 0.01)
+        normal_init(self.fc, 0, 0.01)
 
 def init_weights(model):
     if isinstance(model, nn.Conv2d):
@@ -311,94 +179,6 @@ def init_weights(model):
     elif isinstance(model, nn.Linear):
         model.weight.data.normal_(0, 0.01)
         model.bias.data.zero_()
-
-class CBAMLayer(nn.Module):
-    def __init__(self, channel, reduction=16, spatial_kernel=7):
-        super(CBAMLayer, self).__init__()
-        # channel attention 压缩H,W为1
-        self.max_pool = nn.AdaptiveMaxPool2d(1)
-        self.avg_pool = nn.AdaptiveAvgPool2d(1)
-        # shared MLP
-        self.mlp = nn.Sequential(
-            # Conv2d比Linear方便操作
-            # nn.Linear(channel, channel // reduction, bias=False)
-            nn.Conv2d(channel, channel // reduction, 1, bias=False),
-            # inplace=True直接替换，节省内存
-            nn.ReLU(inplace=True),
-            # nn.Linear(channel // reduction, channel,bias=False)
-            nn.Conv2d(channel // reduction, channel, 1, bias=False)
-        )
-        # spatial attention
-        self.conv = nn.Conv2d(2, 1, kernel_size=spatial_kernel,
-                              padding=spatial_kernel // 2, bias=False)
-        self.sigmoid = nn.Sigmoid()
-
-    def _init_weights(self):
-        def normal_init(m, mean, stddev):
-            """
-            weight initalizer: random normal.
-            """
-            # x is a parameter
-            m.weight.data.normal_(mean, stddev)
-            # m.bias.data.zero_()
-
-        normal_init(self.conv1, 0, 0.01)
-
-    def forward(self, x):
-        max_out = self.mlp(self.max_pool(x))
-        avg_out = self.mlp(self.avg_pool(x))
-        channel_out = self.sigmoid(max_out + avg_out)
-        x = channel_out * x
-        max_out, _ = torch.max(x, dim=1, keepdim=True)
-        avg_out = torch.mean(x, dim=1, keepdim=True)
-        spatial_out = self.sigmoid(self.conv(torch.cat([max_out, avg_out], dim=1)))
-        x = spatial_out * x
-        return x
-
-class NonLocalBlock(nn.Module):
-    def __init__(self, channel):
-        super(NonLocalBlock, self).__init__()
-        self.inter_channel = channel // 2
-        self.conv_phi = nn.Conv2d(in_channels=channel, out_channels=self.inter_channel, kernel_size=1, stride=1,padding=0, bias=False)
-        self.conv_theta = nn.Conv2d(in_channels=channel, out_channels=self.inter_channel, kernel_size=1, stride=1, padding=0, bias=False)
-        self.conv_g = nn.Conv2d(in_channels=channel, out_channels=self.inter_channel, kernel_size=1, stride=1, padding=0, bias=False)
-        self.softmax = nn.Softmax(dim=1)
-        self.conv_mask = nn.Conv2d(in_channels=self.inter_channel, out_channels=channel, kernel_size=1, stride=1, padding=0, bias=False)
-    
-    def _init_weights(self):
-        def normal_init(m, mean, stddev):
-            """
-            weight initalizer: random normal.
-            """
-            # x is a parameter
-            m.weight.data.normal_(mean, stddev)
-            # m.bias.data.zero_()
-
-        normal_init(self.conv_phi, 0, 0.01)
-        normal_init(self.conv_theta, 0, 0.01)
-        normal_init(self.conv_g, 0, 0.01)
-        normal_init(self.conv_mask, 0, 0.01)
-
-    def forward(self, x):
-        # [N, C, H , W]
-        b, c, h, w = x.size()
-        # [N, C/2, H * W]
-        x_phi = self.conv_phi(x).view(b, self.inter_channel, -1)
-        # [N, H * W, C/2]
-        x_theta = self.conv_theta(x).view(b, self.inter_channel, -1).permute(0, 2, 1).contiguous()
-        x_g = self.conv_g(x).view(b, self.inter_channel, -1).permute(0, 2, 1).contiguous()
-        # [N, H * W, H * W]
-        mul_theta_phi = torch.matmul(x_theta, x_phi)
-        mul_theta_phi = self.softmax(mul_theta_phi)
-        # [N, H * W, C/2]
-        mul_theta_phi_g = torch.matmul(mul_theta_phi, x_g)
-        # [N, C/2, H, W]
-        mul_theta_phi_g = mul_theta_phi_g.permute(0,2,1).contiguous().view(b,self.inter_channel, h, w)
-        # [N, C, H , W]
-        mask = self.conv_mask(mul_theta_phi_g)
-        out = mask + x
-        return out
-
 
 class BasicBlock(BaseModule):
     expansion = 1
@@ -890,15 +670,15 @@ class ResNet_DA_SWDA(BaseModule):
         self.patch_mid_align = False
 
         self.criterion = nn.CrossEntropyLoss()
-
-        #self.da_head_top = GlobalAlignmentHead(in_channel=2048, context=False)
-        self.da_head_mid = GlobalAlignmentHead(in_channel=1024, context=False, grl=True)
+        self.context = True
+        self.da_head_top = GlobalAlignmentHead(in_channel=2048, context=self.context)
+        #self.da_head_mid = GlobalAlignmentHead(in_channel=1024, context=False, grl=True)
         #self.local_da_head_mid = LocalAlignmentHead(in_channels=1024, context=False, grl=True)
-        self.local_da_head_bottom = LocalAlignmentHead(in_channels=512, context=False)
+        self.local_da_head_bottom = LocalAlignmentHead(in_channels=512, context=self.context)
 
         
-        #self.da_head_top._init_weights()
-        self.da_head_mid._init_weights()
+        self.da_head_top._init_weights()
+        #self.da_head_mid._init_weights()
         #self.local_da_head_mid._init_weights()
         
         self.local_da_head_bottom._init_weights()
@@ -1053,13 +833,23 @@ class ResNet_DA_SWDA(BaseModule):
             x = self.relu(x)
         x = self.maxpool(x)
         outs = []
+        context_feats = []
         for i, layer_name in enumerate(self.res_layers):
             res_layer = getattr(self, layer_name)
             x = res_layer(x)
-            if i in self.out_indices:
-                outs.append(x)
-    
-        return tuple(outs)
+            if i in self.da_outs_idx:
+                if i in self.out_indices:
+                    outs.append(x)
+                if i == 1 & self.context:
+                    _, local_feat = self.local_da_head_bottom(x)
+                elif i == 3 & self.context:
+                    _, global_feat = self.da_head_top(x)
+                    context_feats = dict(global_feat=global_feat, local_feat=local_feat)
+
+        if self.context == True:
+            return tuple(outs), context_feats # 2x512-d
+        else:
+            return tuple(outs)
 
     def forward_train(self, x, gt_domain):
         """Forward function."""
@@ -1073,28 +863,31 @@ class ResNet_DA_SWDA(BaseModule):
         outs = []
         domain_pred = []
         local_feat = []
+        context_feats = []
         for i, layer_name in enumerate(self.res_layers):
             res_layer = getattr(self, layer_name)
             x = res_layer(x)
             if i in self.da_outs_idx:
                 if i in self.out_indices:
                     outs.append(x)
-                
                 if i == 1:
-                    local_feat_bottom = self.local_da_head_bottom(x)
-                    #domain_pred.append(self.da_head_bottom(x))
-                elif i == 2:
+                    if self.context == True:
+                        local_feat_bottom, local_feat = self.local_da_head_bottom(x) # 512-d
+                    elif self.context == False:
+                        local_feat = self.local_da_head_bottom(x)
+
+                elif i == 3:
                     # x.size() == [1024, 36, 62]
-                    #x = self.shared_conv_mid(x)
-                    domain_pred.append(self.da_head_mid(x))
-                    #local_feat_mid = self.local_da_head_mid(x)
+                    if self.context == True:
+                        global_logit_top, global_feat = self.da_head_top(x) # 512-d
+                        context_feats = dict(global_feat=global_feat, local_feat=local_feat)
+                    elif self.context == False:
+                        global_logit_top = self.da_head_top(x)
 
         # global loss
-        da_globle_loss = torch.zeros(len(domain_pred))
-        for i in range(len(domain_pred)):
-            da_globle_loss[i] = self.criterion(domain_pred[i], gt_domain)
+        da_globle_loss = self.criterion(global_logit_top, gt_domain)
 
-        # bottom
+        # local loss
         if self.patch_bottom_align:
             patch_da_bottom_loss = []
             for i, patch_feat in enumerate(local_feat_bottom):
@@ -1105,7 +898,10 @@ class ResNet_DA_SWDA(BaseModule):
  
             patch_da_bottom_loss = sum(patch_da_bottom_loss)
 
-        return tuple(outs), da_globle_loss, patch_da_bottom_loss
+        if self.context == True:
+            return tuple(outs), da_globle_loss, patch_da_bottom_loss, context_feats
+        else:
+            return tuple(outs), da_globle_loss, patch_da_bottom_loss
 
     def train(self, mode=True):
         """Convert the model into training mode while keep normalization layer
